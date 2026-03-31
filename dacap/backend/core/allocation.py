@@ -43,11 +43,17 @@ class AllocationEngine:
         self.t = 0
 
     def step(self, raw_returns: np.ndarray, volatilities: np.ndarray, drawdowns: np.ndarray) -> np.ndarray:
+        # Always read eta from live protocol params so governance changes apply immediately
+        try:
+            from core.protocol_params import protocol_params
+            live_eta = protocol_params.eta
+        except Exception:
+            live_eta = self.eta
         adj_returns = np.array([
             risk_adjusted_return(r, v, d)
             for r, v, d in zip(raw_returns, volatilities, drawdowns)
         ])
-        self.weights = mwu_update(self.weights, adj_returns, self.eta)
+        self.weights = mwu_update(self.weights, adj_returns, live_eta)
         self.history.append(self.weights.copy())
         self.t += 1
         return self.weights

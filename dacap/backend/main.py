@@ -11,13 +11,16 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+logger = logging.getLogger(__name__)
 
 from api import agents, pools, analytics, contracts, governance
 from api import trading as trading_api
 from api import ws_trading
 from api import ws_prices
-
-logger = logging.getLogger(__name__)
+from api import ws_social
 
 _CONFIG_PATH = Path(__file__).parent.parent / "frontend" / "src" / "contracts" / "config.json"
 
@@ -114,8 +117,10 @@ app = FastAPI(title="DACAP API", version="2.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
-    allow_methods=["*"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
@@ -126,11 +131,32 @@ app.include_router(governance.router, prefix="/api/governance", tags=["governanc
 app.include_router(trading_api.router, prefix="/api/agents", tags=["trading"])
 app.include_router(ws_trading.router, tags=["websocket"])
 app.include_router(ws_prices.router, tags=["prices"])
+app.include_router(ws_social.router, tags=["social"])
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers={
+            "Access-Control-Allow-Origin": request.headers.get("origin", "http://localhost:3000"),
+            "Access-Control-Allow-Credentials": "true",
+        },
+    )
 
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    return JSONResponse(status_code=500, content={"detail": str(exc)})
+    logger.exception(f"Unhandled error on {request.method} {request.url}: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc)},
+        headers={
+            "Access-Control-Allow-Origin": request.headers.get("origin", "http://localhost:3000"),
+            "Access-Control-Allow-Credentials": "true",
+        },
+    )
 
 
 @app.get("/health")

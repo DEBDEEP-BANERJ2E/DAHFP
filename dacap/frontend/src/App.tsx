@@ -9,6 +9,9 @@ import AllocationEngine from './pages/AllocationEngine'
 import Governance from './pages/Governance'
 import Analytics from './pages/Analytics'
 import Contracts from './pages/Contracts'
+import WorldMonitor from './pages/WorldMonitor'
+import AgentSocial from './pages/AgentSocial'
+import PnLHistory from './pages/PnLHistory'
 
 export default function App() {
   return (
@@ -20,9 +23,12 @@ export default function App() {
         <Route path="/agents/:id" element={<AgentDetail />} />
         <Route path="/pools" element={<RiskPools />} />
         <Route path="/allocation" element={<AllocationEngine />} />
-        <Route path="/governance" element={<Governance />} />
         <Route path="/analytics" element={<Analytics />} />
+        <Route path="/governance" element={<Governance />} />
         <Route path="/contracts" element={<Contracts />} />
+        <Route path="/world" element={<WorldMonitor />} />
+        <Route path="/social" element={<AgentSocial />} />
+        <Route path="/pnl-history" element={<PnLHistory />} />
       </Route>
     </Routes>
   )

@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Wallet, CheckCircle, AlertCircle, Loader2, ArrowRight } from 'lucide-react'
 import { useProtocolStore } from '../../store/protocolStore'
 import { useContractInteraction, DelegationFormParams } from '../../hooks/useContractInteraction'
-
 export interface DelegationModalProps {
   isOpen: boolean
   onClose: () => void
@@ -45,7 +44,7 @@ function validateForm(values: FormValues): FormErrors {
 }
 
 export default function DelegationModal({ isOpen, onClose, agent }: DelegationModalProps) {
-  const { walletAddress, isConnected } = useProtocolStore()
+  const { walletAddress, isConnected, addDelegation } = useProtocolStore()
   const { signDelegation, depositETH, isLoading } = useContractInteraction()
 
   const [step, setStep] = useState<Step>('params')
@@ -99,6 +98,16 @@ export default function DelegationModal({ isOpen, onClose, agent }: DelegationMo
     try {
       const hash = await depositETH(params, signature, walletAddress)
       setTxHash(hash)
+      // Persist delegation so agents page can gate Start AI button
+      addDelegation({
+        agentId: agent.id,
+        agentName: agent.name,
+        agentRisk: agent.risk,
+        ethAmount: parseFloat(form.ethAmount),
+        txHash: hash,
+        timestamp: Date.now(),
+        walletAddress: walletAddress,
+      })
       setStep('success')
     } catch (err: unknown) {
       const e = err as { message?: string }

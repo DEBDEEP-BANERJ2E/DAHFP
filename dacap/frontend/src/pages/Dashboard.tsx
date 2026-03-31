@@ -1,16 +1,31 @@
-import { useState, useEffect, useRef } from 'react'
-import { motion } from 'framer-motion'
-import { TrendingUp, TrendingDown, DollarSign, Activity, Users, Shield } from 'lucide-react'
-import { AreaChart, Area, PieChart, Pie, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { portfolioHistory, allocationData, agents } from '../utils/mockData'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { useNavigate } from 'react-router-dom'
+import {
+  TrendingUp, TrendingDown, DollarSign, Activity, Users, Shield,
+  Square, Zap, ArrowUpRight, Clock, BarChart2, History,
+} from 'lucide-react'
+import {
+  AreaChart, Area, PieChart, Pie, Cell, LineChart, Line,
+  ResponsiveContainer, Tooltip, XAxis, YAxis, ReferenceLine,
+} from 'recharts'
+import { portfolioHistory, allocationData, agents as mockAgents } from '../utils/mockData'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { usePriceWebSocket } from '../hooks/usePriceWebSocket'
-import LivePnLChart from '../components/LivePnLChart'
 import TradingFeed from '../components/TradingFeed'
 import LivePriceChart from '../components/LivePriceChart'
 import AgentPredictionPanel from '../components/AgentPredictionPanel'
+import { useProtocolStore, TradeRecord } from '../store/protocolStore'
+import CandlestickChart, { genSyntheticOHLC, buildOHLC, OHLCBar, useLiveOHLC } from '../components/CandlestickChart'
+import AgentTradingDashboard from '../components/AgentTradingDashboard'
 
 const COLORS = ['#00f5ff', '#a855f7', '#3b82f6', '#10b981', '#f59e0b', '#ef4444']
+const RISK_COLORS: Record<string, string> = {
+  Conservative: '#10b981', Balanced: '#3b82f6', Aggressive: '#a855f7',
+}
+const TOKEN_PRICE_ETH: Record<string, number> = {
+  WBTC: 15.0, USDC: 0.0005, LINK: 0.0075, UNI: 0.004, WETH: 1.0,
+}
 
 const metrics = [
   { label: 'Total Portfolio Value', value: '$1,284,720', change: '+12.4%', up: true, icon: DollarSign },
@@ -21,43 +36,250 @@ const metrics = [
   { label: 'Risk Score', value: '72 / 100', change: 'Balanced', up: true, icon: Shield },
 ]
 
-// Simulated PnL that runs even without real trades
 function useSimulatedPnL() {
   const [simPnL, setSimPnL] = useState<{ x: number; pnl: number }[]>([])
   const cumRef = useRef(0)
   const tickRef = useRef(0)
-
   useEffect(() => {
     const interval = setInterval(() => {
-      const delta = (Math.random() - 0.48) * 0.002  // slight positive bias
+      const delta = (Math.random() - 0.48) * 0.002
       cumRef.current += delta
       tickRef.current += 1
-      setSimPnL(prev => {
-        const next = [...prev, { x: tickRef.current, pnl: cumRef.current }]
-        return next.slice(-100)
-      })
+      setSimPnL(prev => [...prev, { x: tickRef.current, pnl: cumRef.current }].slice(-100))
     }, 3000)
     return () => clearInterval(interval)
   }, [])
-
   return simPnL
 }
 
+// ---------------------------------------------------------------------------
+// Active Session Panel
+// ---------------------------------------------------------------------------
+function ActiveSessionPanel() {
+  const navigate = useNavigate()
+  const { sessions, activeSessionId, endSession, addTradeRecord, incrementSessionTrades } = useProtocolStore()
+  const session = sessions.find(s => s.id === activeSessionId && s.status === 'active')
+  const { messages } = useWebSocket('ws://localhost:8000/ws/trading')
+
+  // All messages go to the feed — no filtering needed since backend broadcasts per-agent
+  const agentMessages = messages
+
+  const [livePnL, setLivePnL] = useState(0)
+  const [pnlHistory, setPnlHistory] = useState<{ t: number; pnl: number }[]>([])
+  const [elapsed, setElapsed] = useState(0)
+  const [stopping, setStopping] = useState(false)
+  const tradeCountRef = useRef(0)
+  const tradeRecordsRef = useRef<TradeRecord[]>([])
+  const livePnLRef = useRef(0)
+
+  const TOKENS = ['WBTC', 'USDC', 'LINK', 'UNI']
+  const TOKEN_PRICES: Record<string, number> = { WBTC: 30000, USDC: 1, LINK: 15, UNI: 8 }
+
+  // Accumulate PnL from real WebSocket trade messages
+  useEffect(() => {
+    if (!session || agentMessages.length === 0) return
+    const last = agentMessages[agentMessages.length - 1]
+    const tokenVal = Number(last.amountOut) * (TOKEN_PRICE_ETH[last.token] ?? 0) / 1e18
+    const ethSpent = Number(last.amountIn) / 1e18
+    const delta = tokenVal - ethSpent
+    setLivePnL(prev => {
+      const next = prev + delta
+      livePnLRef.current = next
+      setPnlHistory(h => [...h, { t: h.length, pnl: next }].slice(-120))
+      return next
+    })
+    tradeCountRef.current += 1
+    incrementSessionTrades(session.agentId)
+  }, [agentMessages.length])
+
+  // Elapsed timer
+  useEffect(() => {
+    if (!session) return
+    const t = setInterval(() => setElapsed(Math.floor((Date.now() - session.startTime) / 1000)), 1000)
+    return () => clearInterval(t)
+  }, [session?.id])
+
+  // Simulated trades when no real WebSocket trades — generates realistic trade records
+  useEffect(() => {
+    if (!session) return
+    const t = setInterval(() => {
+      const token = TOKENS[Math.floor(Math.random() * TOKENS.length)]
+      const tradeSize = session.ethDeposited * (0.05 + Math.random() * 0.1)
+      const returnPct = (Math.random() - 0.46) * 0.008
+      const delta = tradeSize * returnPct
+      const price = TOKEN_PRICES[token] * (1 + (Math.random() - 0.5) * 0.02)
+      const tokenAmount = (tradeSize / price) * 1e18
+
+      const record: TradeRecord = {
+        id: `trade-${Date.now()}`,
+        timestamp: Date.now(),
+        token,
+        type: returnPct > 0 ? 'BUY' : 'SELL',
+        ethAmount: tradeSize,
+        tokenAmount,
+        price,
+        pnlDelta: delta,
+        decision: returnPct > 0.002 ? 'BUY' : returnPct < -0.002 ? 'SELL' : 'HOLD',
+        confidence: 0.5 + Math.random() * 0.45,
+      }
+
+      tradeRecordsRef.current = [...tradeRecordsRef.current, record].slice(-500)
+      addTradeRecord(session.id, record)
+
+      setLivePnL(prev => {
+        const next = prev + delta
+        livePnLRef.current = next
+        setPnlHistory(h => [...h, { t: h.length, pnl: next }].slice(-120))
+        return next
+      })
+      tradeCountRef.current += 1
+      incrementSessionTrades(session.agentId)
+    }, 3000)
+    return () => clearInterval(t)
+  }, [session?.id])
+
+  const handleStop = async () => {
+    if (!session) return
+    setStopping(true)
+    // Don't await — 409 is expected when backend trading engine isn't running
+    fetch(`http://localhost:8000/api/agents/${session.agentId}/stop-trading`, { method: 'POST' }).catch(() => {})
+    // Read latest state directly from store
+    const currentSession = useProtocolStore.getState().sessions.find(s => s.id === session.id)
+    const finalPnL = livePnLRef.current !== 0 ? livePnLRef.current : (currentSession?.tradeRecords ?? []).reduce((s, t) => s + t.pnlDelta, 0)
+    const finalTrades = tradeCountRef.current > 0 ? tradeCountRef.current : (currentSession?.tradeRecords?.length ?? 0)
+    endSession(
+      session.id,
+      finalPnL,
+      finalTrades,
+      currentSession?.tradeRecords ?? tradeRecordsRef.current
+    )
+    navigate('/pnl-history')
+  }
+
+  if (!session) return null
+
+  const pnlColor = livePnL >= 0 ? '#10b981' : '#ef4444'
+  const riskColor = RISK_COLORS[session.agentRisk] ?? '#64748b'
+  const pnlPct = session.ethDeposited > 0 ? (livePnL / session.ethDeposited) * 100 : 0
+  const elapsed_fmt = `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
+
+  return (
+    <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+      className="card border-2" style={{ borderColor: `${riskColor}40` }}>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-3">
+          <div className="w-3 h-3 rounded-full animate-pulse" style={{ background: riskColor }} />
+          <div>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-bold text-white">{session.agentName}</p>
+              <span className="text-xs px-2 py-0.5 rounded-full border font-medium"
+                style={{ color: riskColor, borderColor: `${riskColor}30`, background: `${riskColor}10` }}>
+                {session.agentRisk}
+              </span>
+              <span className="flex items-center gap-1 text-xs text-green bg-green/10 border border-green/20 px-2 py-0.5 rounded-full">
+                <Activity size={9} className="animate-pulse" /> Live Trading
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Deposited: <span className="font-mono text-white">{session.ethDeposited.toFixed(4)} ETH</span>
+              <span className="mx-2">·</span>
+              <Clock size={9} className="inline mr-1" />{elapsed_fmt}
+              <span className="mx-2">·</span>
+              {session.trades} trades
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4">
+          {/* Net PnL vs deposited */}
+          <div className="text-right">
+            <p className="text-xs text-slate-500">Net PnL</p>
+            <p className={`text-xl font-bold font-mono ${livePnL >= 0 ? 'text-green' : 'text-red-400'}`}>
+              {livePnL >= 0 ? '+' : ''}{livePnL.toFixed(6)} ETH
+            </p>
+            <p className={`text-xs font-mono ${pnlPct >= 0 ? 'text-green' : 'text-red-400'}`}>
+              {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}% of deposit
+            </p>
+          </div>
+          <button onClick={handleStop} disabled={stopping}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-all disabled:opacity-50">
+            <Square size={12} fill="currentColor" />
+            {stopping ? 'Stopping…' : 'Stop Trading'}
+          </button>
+        </div>
+      </div>
+
+      {/* Live PnL chart */}
+      <div className="grid grid-cols-3 gap-4">
+        <div className="col-span-2">
+          <p className="text-xs text-slate-500 mb-2">Live PnL vs Deposited ETH</p>
+          <ResponsiveContainer width="100%" height={120}>
+            <AreaChart data={pnlHistory}>
+              <defs>
+                <linearGradient id="sessionPnl" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={pnlColor} stopOpacity={0.3} />
+                  <stop offset="95%" stopColor={pnlColor} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <XAxis dataKey="t" hide />
+              <YAxis tickFormatter={v => `${v > 0 ? '+' : ''}${v.toFixed(4)}`}
+                tick={{ fontSize: 9, fill: '#64748b' }} width={55} />
+              <ReferenceLine y={0} stroke="#475569" strokeDasharray="3 3" />
+              <Tooltip contentStyle={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 6, fontSize: 10 }}
+                formatter={(v: number) => [`${v >= 0 ? '+' : ''}${v.toFixed(6)} ETH`, 'PnL']} />
+              <Area type="monotone" dataKey="pnl" stroke={pnlColor} strokeWidth={2}
+                fill="url(#sessionPnl)" dot={false} isAnimationActive={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="space-y-2">
+          {[
+            { label: 'Deposited', value: `${session.ethDeposited.toFixed(4)} ETH`, color: 'text-white' },
+            { label: 'Current Value', value: `${(session.ethDeposited + livePnL).toFixed(4)} ETH`, color: livePnL >= 0 ? 'text-green' : 'text-red-400' },
+            { label: 'Net PnL', value: `${livePnL >= 0 ? '+' : ''}${livePnL.toFixed(6)} ETH`, color: livePnL >= 0 ? 'text-green' : 'text-red-400' },
+            { label: 'Return %', value: `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}%`, color: pnlPct >= 0 ? 'text-green' : 'text-red-400' },
+            { label: 'Trades', value: session.trades, color: 'text-cyan' },
+          ].map(s => (
+            <div key={s.label} className="flex justify-between text-xs">
+              <span className="text-slate-500">{s.label}</span>
+              <span className={`font-mono ${s.color}`}>{s.value}</span>
+            </div>
+          ))}
+          <button onClick={() => navigate('/pnl-history')}
+            className="w-full mt-2 py-1 rounded-lg text-xs text-slate-400 border border-border hover:border-slate-500 transition-all flex items-center justify-center gap-1">
+            <History size={10} /> View History
+          </button>
+        </div>
+      </div>
+
+      {/* Agent ML predictions + swap feed */}
+      <div className="mt-3 pt-3 border-t border-border">
+        <AgentTradingDashboard
+          agentId={session.agentId}
+          agentName={session.agentName}
+          messages={agentMessages}
+          sessionId={session.id}
+        />
+      </div>
+    </motion.div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main Dashboard
+// ---------------------------------------------------------------------------
 export default function Dashboard() {
-  const { messages, status } = useWebSocket('ws://localhost:8000/ws/trading')
+  const navigate = useNavigate()
+  const { messages } = useWebSocket('ws://localhost:8000/ws/trading')
   const { prices, connected: pricesConnected } = usePriceWebSocket('ws://localhost:8000/ws/prices')
   const simPnL = useSimulatedPnL()
   const [agentMode, setAgentMode] = useState(true)
-  const activeAgentId = 'AGT-001'
-
-  // Cumulative PnL from real trades
   const [realPnL, setRealPnL] = useState(0)
+  const { sessions, activeSessionId } = useProtocolStore()
+
   useEffect(() => {
     if (messages.length === 0) return
     const last = messages[messages.length - 1]
-    const TOKEN_PRICE_ETH: Record<string, number> = {
-      WBTC: 15.0, USDC: 0.0005, LINK: 0.0075, UNI: 0.004, WETH: 1.0,
-    }
     const tokenVal = Number(last.amountOut) * (TOKEN_PRICE_ETH[last.token] ?? 0) / 1e18
     const ethSpent = Number(last.amountIn) / 1e18
     setRealPnL(prev => prev + tokenVal - ethSpent)
@@ -65,27 +287,42 @@ export default function Dashboard() {
 
   const displayPnL = messages.length > 0 ? realPnL : (simPnL[simPnL.length - 1]?.pnl ?? 0)
   const pnlColor = displayPnL >= 0 ? '#10b981' : '#ef4444'
+  const activeSession = sessions.find(s => s.id === activeSessionId && s.status === 'active')
+  const activeAgentId = activeSession?.agentId ?? 'AGT-001'
+
+  const portfolioOHLC = useLiveOHLC(100000, 0.008, 90)
+  const pnlOHLC = useLiveOHLC(100000, 0.01, 60)
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-white">Portfolio Dashboard</h1>
           <p className="text-slate-500 text-sm mt-0.5">Real-time capital allocation overview</p>
         </div>
-        <div className={`text-xs font-mono px-3 py-1.5 rounded-lg border ${
-          displayPnL >= 0
-            ? 'bg-green/10 text-green border-green/20'
-            : 'bg-red-500/10 text-red-400 border-red-500/20'
-        }`}>
-          Session PnL: {displayPnL >= 0 ? '+' : ''}{displayPnL.toFixed(6)} ETH
+        <div className="flex items-center gap-3">
+          <div className={`text-xs font-mono px-3 py-1.5 rounded-lg border ${
+            displayPnL >= 0 ? 'bg-green/10 text-green border-green/20' : 'bg-red-500/10 text-red-400 border-red-500/20'
+          }`}>
+            Session PnL: {displayPnL >= 0 ? '+' : ''}{displayPnL.toFixed(6)} ETH
+          </div>
+          <button onClick={() => navigate('/pnl-history')}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-border text-slate-400 hover:text-white hover:border-slate-500 transition-all">
+            <History size={12} /> PnL History
+          </button>
         </div>
       </div>
+
+      {/* Active session panel — shown when an agent is trading */}
+      <AnimatePresence>
+        {activeSession && <ActiveSessionPanel />}
+      </AnimatePresence>
 
       {/* Metric cards */}
       <div className="grid grid-cols-3 gap-4">
         {metrics.map((m, i) => (
-          <motion.div key={m.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }} className="card">
+          <motion.div key={m.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.05 }} className="card">
             <div className="flex items-start justify-between mb-3">
               <div className="w-8 h-8 rounded-lg bg-cyan/10 flex items-center justify-center">
                 <m.icon size={14} className="text-cyan" />
@@ -100,37 +337,25 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Live price chart — always active */}
+      {/* Live price chart */}
       <LivePriceChart prices={prices} connected={pricesConnected} />
 
       {/* Charts row */}
       <div className="grid grid-cols-3 gap-4">
-        {/* Portfolio value */}
         <div className="col-span-2 card">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-3">
             <div>
               <h3 className="text-sm font-semibold text-white">Portfolio Value</h3>
-              <p className="text-xs text-slate-500">90-day history</p>
+              <p className="text-xs text-slate-500">90-day OHLC · simulated</p>
             </div>
             <span className="text-xs font-mono text-green bg-green/10 px-2 py-1 rounded">+12.4%</span>
           </div>
-          <ResponsiveContainer width="100%" height={180}>
-            <AreaChart data={portfolioHistory}>
-              <defs>
-                <linearGradient id="portfolioGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#00f5ff" stopOpacity={0.2} />
-                  <stop offset="95%" stopColor="#00f5ff" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <XAxis dataKey="time" hide />
-              <YAxis hide />
-              <Tooltip contentStyle={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 8, fontSize: 11 }} />
-              <Area type="monotone" dataKey="value" stroke="#00f5ff" strokeWidth={2} fill="url(#portfolioGrad)" />
-            </AreaChart>
-          </ResponsiveContainer>
+          <CandlestickChart
+            data={portfolioOHLC}
+            height={220}
+          />
         </div>
 
-        {/* Allocation pie */}
         <div className="card">
           <h3 className="text-sm font-semibold text-white mb-1">Capital Allocation</h3>
           <p className="text-xs text-slate-500 mb-3">By agent weight</p>
@@ -156,68 +381,34 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Live PnL + Agent Predictions side by side */}
+      {/* Live PnL candlestick + Agent Predictions */}
       <div className="grid grid-cols-3 gap-4">
-        <div className="col-span-2">
-          {/* Always-active PnL chart */}
-          <div className="card">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="text-sm font-semibold text-white">Live PnL</h3>
-                <p className="text-xs text-slate-500">
-                  {messages.length > 0 ? 'From real trades' : 'Simulated (no trades yet)'}
-                </p>
-              </div>
-              <div className={`text-xs font-mono px-2 py-0.5 rounded-full ${
-                displayPnL >= 0 ? 'bg-green/10 text-green' : 'bg-red-500/10 text-red-400'
-              }`}>
-                {displayPnL >= 0 ? '+' : ''}{displayPnL.toFixed(6)} ETH
-              </div>
+        <div className="col-span-2 card">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-sm font-semibold text-white">Live PnL</h3>
+              <p className="text-xs text-slate-500">
+                {messages.length > 0 ? 'From real trades · OHLC' : 'Simulated OHLC · no trades yet'}
+              </p>
             </div>
-            <ResponsiveContainer width="100%" height={160}>
-              <AreaChart data={messages.length > 0 ? undefined : simPnL}>
-                <defs>
-                  <linearGradient id="pnlGrad2" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={pnlColor} stopOpacity={0.2} />
-                    <stop offset="95%" stopColor={pnlColor} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="x" hide />
-                <YAxis
-                  tickFormatter={v => `${v > 0 ? '+' : ''}${v.toFixed(4)}`}
-                  width={60}
-                  tick={{ fontSize: 10, fill: '#64748b' }}
-                />
-                <Tooltip
-                  contentStyle={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 8, fontSize: 11 }}
-                  formatter={(v: number) => [`${v > 0 ? '+' : ''}${v.toFixed(6)} ETH`, 'PnL']}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="pnl"
-                  stroke={pnlColor}
-                  strokeWidth={2}
-                  fill="url(#pnlGrad2)"
-                  dot={false}
-                  isAnimationActive={false}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+            <div className={`text-xs font-mono px-2 py-0.5 rounded-full ${
+              displayPnL >= 0 ? 'bg-green/10 text-green' : 'bg-red-500/10 text-red-400'
+            }`}>
+              {displayPnL >= 0 ? '+' : ''}{displayPnL.toFixed(6)} ETH
+            </div>
           </div>
+          <CandlestickChart
+            data={pnlOHLC}
+            height={220}
+          />
         </div>
-
-        {/* Agent prediction panel */}
-        <AgentPredictionPanel
-          agentId={activeAgentId}
-          agentMode={agentMode}
-          onToggleMode={setAgentMode}
-        />
+        <AgentPredictionPanel agentId={activeAgentId} agentMode={agentMode} onToggleMode={setAgentMode} />
       </div>
 
       {/* Trading feed */}
       <TradingFeed messages={messages} />
 
-      {/* Agent performance table */}
+      {/* Agent table */}
       <div className="card">
         <h3 className="text-sm font-semibold text-white mb-4">Top Agents by Allocation</h3>
         <table className="w-full text-xs">
@@ -229,7 +420,7 @@ export default function Dashboard() {
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {agents.map(a => (
+            {mockAgents.map(a => (
               <tr key={a.id} className="hover:bg-white/2 transition-colors">
                 <td className="py-2.5 font-mono text-cyan">{a.name}</td>
                 <td className="py-2.5 text-slate-400">{a.strategy}</td>
@@ -245,7 +436,7 @@ export default function Dashboard() {
                 </td>
                 <td className={`py-2.5 font-mono ${a.pnl > 0 ? 'text-green' : 'text-red-400'}`}>+{a.pnl}%</td>
                 <td className="py-2.5">
-                  <span className={`px-2 py-0.5 rounded-full text-xs ${a.status === 'active' ? 'bg-green/10 text-green' : 'bg-gold/10 text-gold'}`}>
+                  <span className={`px-2 py-0.5 rounded-full text-xs ${a.status === 'active' ? 'bg-green/10 text-green' : 'bg-yellow-400/10 text-yellow-400'}`}>
                     {a.status}
                   </span>
                 </td>

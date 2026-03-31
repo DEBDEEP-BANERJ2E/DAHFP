@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Bot, Layers, Cpu, Vote, BarChart3, FileCode2, Zap } from 'lucide-react'
+import { LayoutDashboard, Bot, Layers, Cpu, Vote, BarChart3, FileCode2, Zap, Globe, MessageSquare, TrendingUp } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 const nav = [
@@ -8,6 +8,9 @@ const nav = [
   { to: '/pools', icon: Layers, label: 'Risk Pools' },
   { to: '/allocation', icon: Cpu, label: 'Allocation Engine' },
   { to: '/analytics', icon: BarChart3, label: 'Analytics' },
+  { to: '/pnl-history', icon: TrendingUp, label: 'PnL History' },
+  { to: '/world', icon: Globe, label: 'World Monitor' },
+  { to: '/social', icon: MessageSquare, label: 'Agent Social' },
   { to: '/governance', icon: Vote, label: 'Governance' },
   { to: '/contracts', icon: FileCode2, label: 'Contracts' },
 ]

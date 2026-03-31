@@ -34,9 +34,12 @@ def get_regime():
 
 
 @router.get("/allocation-weights")
-def get_weights(eta: float = 0.01, steps: int = 50):
+def get_weights(eta: float = None, steps: int = 50):
     from core.allocation import AllocationEngine
-    engine = AllocationEngine(n_agents=6, eta=eta)
+    from core.protocol_params import protocol_params
+    # Use governance-controlled eta if not explicitly overridden
+    effective_eta = eta if eta is not None else protocol_params.eta
+    engine = AllocationEngine(n_agents=6, eta=effective_eta)
     history = []
     for _ in range(steps):
         raw_r = np.random.normal(0.001, 0.01, 6)
@@ -44,4 +47,10 @@ def get_weights(eta: float = 0.01, steps: int = 50):
         dds = np.random.uniform(0.01, 0.15, 6)
         w = engine.step(raw_r, vols, dds)
         history.append(w.tolist())
-    return {"weights_history": history, "final_weights": engine.weights.tolist(), "regret_bound": engine.get_regret_bound()}
+    return {
+        "weights_history": history,
+        "final_weights": engine.weights.tolist(),
+        "regret_bound": engine.get_regret_bound(),
+        "eta_used": effective_eta,
+        "eta_source": "governance" if eta is None else "manual",
+    }

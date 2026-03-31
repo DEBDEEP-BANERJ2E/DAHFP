@@ -19,6 +19,9 @@ export const agents = [
   { id: 'AGT-004', address: '0x90F79bf6EB2c4f870365E785982E1f101E93b906', name: 'VoltexAI', strategy: 'Volatility Breakout', risk: 'Aggressive', sharpe: 3.12, drawdown: -14.5, allocation: 15, pnl: 52.1, volatility: 28.9, stake: 60000, status: 'active', score: 88 },
   { id: 'AGT-005', address: '0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65', name: 'DeltaHedge', strategy: 'Options Delta Neutral', risk: 'Balanced', sharpe: 1.23, drawdown: -5.9, allocation: 10, pnl: 9.8, volatility: 9.1, stake: 30000, status: 'probation', score: 62 },
   { id: 'AGT-006', address: '0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc', name: 'OmegaFlow', strategy: 'Liquidation Hunter', risk: 'Aggressive', sharpe: 2.78, drawdown: -11.2, allocation: 7, pnl: 41.3, volatility: 22.6, stake: 45000, status: 'active', score: 85 },
+  { id: 'AGT-007', address: '0xBcd4042DE499D14e55001CcbB24a551F3b954096', name: 'StableYield', strategy: 'Stablecoin Yield Optimization', risk: 'Conservative', sharpe: 1.18, drawdown: -1.4, allocation: 12, pnl: 8.9, volatility: 4.2, stake: 28000, status: 'active', score: 72 },
+  { id: 'AGT-008', address: '0x71bE63f3384f5fb98995898A86B02Fb2426c5788', name: 'FluxArb', strategy: 'Statistical Pairs Trading', risk: 'Balanced', sharpe: 2.05, drawdown: -6.3, allocation: 14, pnl: 27.4, volatility: 13.7, stake: 42000, status: 'active', score: 80 },
+  { id: 'AGT-009', address: '0xdD2FD4581271e230360230F9337D5c0430Bf44C0', name: 'NovaSurge', strategy: 'High-Frequency Momentum Scalping', risk: 'Aggressive', sharpe: 3.44, drawdown: -17.8, allocation: 9, pnl: 61.2, volatility: 33.1, stake: 70000, status: 'active', score: 87 },
 ]
 
 export const pools = [
